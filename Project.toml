@@ -1,0 +1,13 @@
+name = "RemotePhaseRetrieval"
+uuid = "43efb05b-46ae-481b-ad2a-95cc2244bb13"
+authors = ["Mark Kittisopikul <kittisopikulm@janelia.hhmi.org> and contributors"]
+version = "0.1.0"
+
+[compat]
+julia = "1"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
