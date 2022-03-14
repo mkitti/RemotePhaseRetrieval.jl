@@ -3,6 +3,16 @@ uuid = "43efb05b-46ae-481b-ad2a-95cc2244bb13"
 authors = ["Mark Kittisopikul <kittisopikulm@janelia.hhmi.org> and contributors"]
 version = "0.1.0"
 
+[deps]
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+LsqFit = "2fda8390-95c7-5789-9bda-21331edee243"
+Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+ZernikePolynomials = "e462d300-c971-11e9-30f1-fb93b1f8f73a"
+
 [compat]
 julia = "1"
 
