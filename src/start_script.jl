@@ -10,6 +10,10 @@ println("Starting server...")
 RemotePhaseRetrieval.run_server()
 println("Server started.")
 
+println("Running demo client...")
+RemotePhaseRetrieval.demo_client()
+println("Demo done.")
+
 function wait_for_quit()
     msg = ""
     while msg != "quit"

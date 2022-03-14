@@ -252,7 +252,7 @@ function read_array(sock)
     dims = ntuple(ndims) do i
         read(sock, Int64)
     end
-    type = class == "double" ? Float64 : error("Unknown type")
+    type = class == "double" || class == "Float64" ? Float64 : error("Unknown type")
     A = Array{type}(undef, dims)
     read!(sock, A)
     write(sock, sizeof(A))
@@ -264,6 +264,7 @@ function serve_lsq_fit_psf(sock)
         A = read_array(sock)
         result = processArray(A)
         write(sock, result.param...)
+        println("$(Threads.threadid()): $(result.param)")
         CUDA.reclaim()
         GC.gc()
 end
@@ -300,7 +301,12 @@ function processArray(psf)
     result = lock(locks[Threads.threadid()]) do
         device!(cw[Threads.threadid()].device)
         objfun = make_psfGenerator_vector_mk(cw[Threads.threadid()])
-        curve_fit(objfun, [], ifftshift2(psf)[:], param0; inplace = true, x_tol, lower = lb, upper = ub, show_trace = false)
+        working_psf = ifftshift2(psf)[:]
+        result = curve_fit(objfun, [], copy(working_psf), param0; inplace = true, x_tol, lower = lb, upper = ub, show_trace = false)
+        fit_psf = objfun(copy(working_psf), nothing, result.param)
+        residual = sum(abs2.(working_psf .- fit_psf))
+        println("$(Threads.threadid()): residual = $residual")
+        result
     end
     return result
 end
@@ -326,6 +332,35 @@ function warmup()
     end
     wait(t)
     return out
+end
+
+function send_array(t, array)
+    # t = connect(2009)
+    println(t, string(eltype(array)))
+    write(t, length(array));
+    write(t, ndims(array));
+    write.(Ref(t), size(array));
+    write(t, array)
+    # bytes acknowledged
+    bytes_ack = read(t, Int64)
+    @assert bytes_ack == sizeof(array) "$bytes_ack $(sizeof(array))"
+    return bytes_ack
+end
+
+function demo_client(t = connect(2009))
+    if bytesavailable(t) > 0
+        readavailable(t)
+    end
+    println(t, "lsq_fit_psf");
+    status = read(t, Int64);
+    @assert(status == 1);
+    psf = h5open(joinpath(@__DIR__, "..", "mock_psf_test.h5")) do f
+        Float64.(f["psf"][])
+    end
+    send_array(t, psf);
+    buffer = zeros(Float64, 17)
+    read!(t, buffer)
+    return buffer
 end
 
 function __init__()
