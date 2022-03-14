@@ -194,7 +194,7 @@ end
 
 function run_server()
     server_task = @async begin
-        server = listen(2009)
+        server = listen(IPv4(0), 2009)
         while true
             sock = accept(server)
             accept_task = Threads.@spawn begin
