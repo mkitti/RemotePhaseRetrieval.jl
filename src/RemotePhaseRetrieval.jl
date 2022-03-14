@@ -314,7 +314,7 @@ function loadSupportArrays()
 end
 
 function warmup()
-    psf = h5open("mock_psf_test.h5", "r") do f
+    psf = h5open(joinpath(@__DIR__, "..", "mock_psf_test.h5")) do f
         f["psf"][]
     end
     out = nothing
