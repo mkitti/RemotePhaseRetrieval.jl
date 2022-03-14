@@ -264,6 +264,7 @@ function serve_lsq_fit_psf(sock)
         A = read_array(sock)
         result = processArray(A)
         write(sock, result.param...)
+        CUDA.reclaim()
 end
 
 function serve_support_arrays(sock)
