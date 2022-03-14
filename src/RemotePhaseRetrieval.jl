@@ -166,7 +166,7 @@ function make_psfGenerator_vector_mk(w::CudaPSFWorkspace{F}) where F
         w.x .= w.aperature .* exp.(1im * w.phase)
         w.x_aber .= w.aber .* w.x4
         w.intensity .= abs2.(fft2!(w.x_aber))
-        w.summed_intensity .= sum(w.intensity, dims = 4)
+        sum!(w.summed_intensity, w.intensity)
         w.psf_vec .= vec(w.summed_intensity) .* I
         copyto!(psf_vec_g, w.psf_vec)
         return psf_vec_g
@@ -265,6 +265,7 @@ function serve_lsq_fit_psf(sock)
         result = processArray(A)
         write(sock, result.param...)
         CUDA.reclaim()
+        GC.gc()
 end
 
 function serve_support_arrays(sock)
