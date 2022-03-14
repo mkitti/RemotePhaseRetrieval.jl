@@ -18,6 +18,7 @@ function wait_for_quit()
             CUDA.device!(d)
             CUDA.reclaim()
         end
+        GC.gc()
         msg = readline()
     end
 end
