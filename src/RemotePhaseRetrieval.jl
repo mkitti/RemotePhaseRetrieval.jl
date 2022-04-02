@@ -53,6 +53,13 @@ function CudaPSFWorkspace{F}(aperature, aber, zComp) where F
     intensity        =          CuArray{F}(undef, nx,  ny, nz, napo)
     summed_intensity =          CuArray{F}(undef, nx,  ny, nz, 1)
     psf_vec          =          CuArray{F}(undef, nx*ny*nz)
+    # Fill to force eager allocation
+    fill!(phase, 0.0)
+    fill!(x, 0.0)
+    fill!(x_aber, 0.0)
+    fill!(intensity, 0.0)
+    fill!(summed_intensity, 0.0)
+    fill!(psf_vec, 0.0)
     CudaPSFWorkspace{F}(
         nx, ny, nz,
         napo, nxy, nzc,
@@ -192,56 +199,73 @@ function psfGenerator_vector_mk(psf_vec_g, xdata, param)
 end
 =#
 
-function run_server()
+function run_server(addr = IPv4(0), port = 2009)
     server_task = @async begin
-        server = listen(IPv4(0), 2009)
-        while true
-            sock = accept(server)
-            accept_task = Threads.@spawn begin
-                #device!((Threads.threadid()-1) % CUDA.ndevices())
-                ti = Threads.threadid()
-                dev = cw[ti].device
-                device!(dev)
-                while isopen(sock)
+        server = listen(addr, port)
+        for i in 1:Threads.nthreads()
+            Threads.@spawn begin
+                taskid = i
+                task_local_storage("taskid", taskid)
+                while true
+                    println("Accepting connections on task $taskid")
+                    sock = nothing
                     try
-                        println("Waiting for command: thread $ti using $dev.")
-                        command = readline(sock)
-                        println(command)
-                        if command == "lsq_fit_psf"
-                            write(sock, Int64(1))
-                            serve_lsq_fit_psf(sock)
-                        elseif command == "set_support_arrays"
-                            write(sock, Int64(1))
-                            serve_support_arrays(sock)
-                        elseif command == "reclaim"
-                            write(sock, Int64(1))
-                            CUDA.reclaim()
-                        elseif command == "close"
-                            if isopen(sock)
-                                write(sock, Int64(1))
-                            end
-                            close(sock)
-                        else
-                            if isopen(sock)
-                                write(sock, Int64(-1))
-                            end
-                            @warn "Unknown command received" command
-                        end
+                        sock = accept(server)
+                        process_connection(sock, taskid)
                     catch err
-                        println(err)
-                        if isopen(sock)
-                            write(sock, Int64(-1))
+                        Base.printstyled("ERROR: "; color=:red, bold=true)
+                        Base.showerror(stdout, err, Base.catch_backtrace())
+                    finally
+                        if !isnothing(sock) && isopen(sock)
                             close(sock)
                         end
-                        rethrow(err)
-                    finally
                     end
                 end
             end
-            errormonitor(accept_task)
         end
     end
     errormonitor(server_task)
+    return server_task
+end
+
+function process_connection(sock, taskid)
+    dev = cw[taskid].device
+    device!(dev)
+    while isopen(sock)
+        try
+            println("Waiting for command: task $taskid using $dev.")
+            command = readline(sock)
+            println("Received command $command: task $taskid using $dev.")
+            if command == "lsq_fit_psf"
+                write(sock, Int64(1))
+                serve_lsq_fit_psf(sock, taskid)
+            elseif command == "set_support_arrays"
+                write(sock, Int64(1))
+                serve_support_arrays(sock, taskid)
+            elseif command == "reclaim"
+                write(sock, Int64(1))
+                CUDA.reclaim()
+            elseif command == "close"
+                if isopen(sock)
+                    write(sock, Int64(1))
+                end
+                close(sock)
+            else
+                if isopen(sock)
+                    write(sock, Int64(-1))
+                end
+                @warn "Unknown command received" command
+            end
+        catch err
+            #println(err)
+            if isopen(sock)
+                write(sock, Int64(-1))
+                close(sock)
+            end
+            rethrow(err)
+        finally
+        end
+    end
 end
 
 function read_array(sock)
@@ -260,30 +284,27 @@ function read_array(sock)
     return A
 end
 
-function serve_lsq_fit_psf(sock)
+function serve_lsq_fit_psf(sock, taskid)
         A = read_array(sock)
-        result = processArray(A)
+        result = processArray(A, taskid)
         write(sock, result.param...)
-        println("$(Threads.threadid()): $(result.param)")
+        println("$taskid: $(result.param)")
         CUDA.reclaim()
         GC.gc()
 end
 
-function serve_support_arrays(sock)
+function serve_support_arrays(sock, taskid)
     println("Loading new support arrays.")
     a = read_array(sock)
     aber_real = read_array(sock)
     aber_imag = read_array(sock)
     aber = aber_real + 1im*aber_imag
     zComp = read_array(sock)
-    Threads.@threads for i=1:Threads.nthreads()
-        lock(locks[i])
-        device!((i-1) % CUDA.ndevices())
-        cw[i] = CudaPSFWorkspace(a, aber, zComp)
-        #CUDA.reclaim()
-        unlock(locks[i])
-    end
-    println("Loaded new support arrays.")
+    #lock(locks[taskid])
+    device!((taskid-1) % CUDA.ndevices())
+    cw[taskid] = CudaPSFWorkspace(a, aber, zComp)
+    #unlock(locks[taskid])
+    println("Loaded new support arrays on task $taskid: $(size(aber)).")
 end
 
 const NUM_PARAMETERS = 17
@@ -291,21 +312,23 @@ const NUM_PARAMETERS = 17
 ifftshift2(A) = ifftshift(ifftshift(A, 1), 2)
 
 const cw = Vector{CudaPSFWorkspace}(undef, 1)
-const locks = Vector{ReentrantLock}(undef, 1)
+#const locks = Vector{ReentrantLock}(undef, 1)
 
-function processArray(psf)
+function processArray(psf, taskid)
     param0 = map(i->i== 1 ? sum(psf)/length(psf) : 0.0, 1:NUM_PARAMETERS)
     lb = map(i->i==1 ? 0.0 : -10.0, 1:NUM_PARAMETERS)
     ub = map(i->i==1 ? 1.0 :  10.0, 1:NUM_PARAMETERS)
     x_tol = 1e-3
-    result = lock(locks[Threads.threadid()]) do
-        device!(cw[Threads.threadid()].device)
-        objfun = make_psfGenerator_vector_mk(cw[Threads.threadid()])
+    #result = lock(locks[taskid]) do
+    result = begin
+        device!(cw[taskid].device)
+        objfun = make_psfGenerator_vector_mk(cw[taskid])
         working_psf = ifftshift2(psf)[:]
+        println("$taskid: aber, $(size(cw[taskid].aber)); psf, $(size(psf))")
         result = curve_fit(objfun, [], copy(working_psf), param0; inplace = true, x_tol, lower = lb, upper = ub, show_trace = false)
         fit_psf = objfun(copy(working_psf), nothing, result.param)
         residual = sum(abs2.(working_psf .- fit_psf))
-        println("$(Threads.threadid()): residual = $residual")
+        println("$taskid: residual = $residual")
         result
     end
     return result
@@ -327,7 +350,7 @@ function warmup()
     end
     out = nothing
     t = Threads.@spawn begin
-        out = processArray(psf)
+        out = processArray(psf, 1)
         nothing
     end
     wait(t)
@@ -360,6 +383,9 @@ function demo_client(t = connect(2009))
     send_array(t, psf);
     buffer = zeros(Float64, 17)
     read!(t, buffer)
+    println(t, "close")
+    sleep(1)
+    close(t)
     return buffer
 end
 
@@ -367,9 +393,9 @@ function __init__()
     a, aber, zComp = loadSupportArrays()
     device!(0)
     cw[1] = CudaPSFWorkspace(a, aber, zComp)
-    locks[1] = ReentrantLock()
+    #locks[1] = ReentrantLock()
     Threads.resize_nthreads!(cw)
-    Threads.resize_nthreads!(locks)
+    #Threads.resize_nthreads!(locks)
     Threads.@threads for i=2:Threads.nthreads()
         d = (i-1) % CUDA.ndevices()
         device!(d)
