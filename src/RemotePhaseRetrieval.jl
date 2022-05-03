@@ -1,13 +1,13 @@
 module RemotePhaseRetrieval
 
-# Write your package code here.
-
 using StaticArrays
 using FFTW
 using LsqFit
 using CUDA
 using HDF5
 using Sockets
+
+const NUM_PARAMETERS = 17
 
 CUDA.allowscalar(false)
 
@@ -307,7 +307,6 @@ function serve_support_arrays(sock, taskid)
     println("Loaded new support arrays on task $taskid: $(size(aber)).")
 end
 
-const NUM_PARAMETERS = 17
 
 ifftshift2(A) = ifftshift(ifftshift(A, 1), 2)
 
